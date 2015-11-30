@@ -1,24 +1,27 @@
 ;;; powerline.el --- Rewrite of Powerline
 
-;; Copyright (c) 2013, 2012 Donald Ephraim Curtis
-;; Copyright (c) 2013 Jason Milkins
-;; Copyright (c) 2012 Nicolas Rougier
+;; Copyright (C) 2012-2013 Donald Ephraim Curtis
+;; Copyright (C) 2013 Jason Milkins
+;; Copyright (C) 2012 Nicolas Rougier
 
 ;; Author: Donald Ephraim Curtis <dcurtis@milkbox.net>
-;; URL: http://github.com/milkypostman/powerline
-;; Version: 2.1
+;; URL: http://github.com/milkypostman/powerline/
+;; Version: 2.3
 ;; Keywords: mode-line
-
+;; Package-Requires: ((cl-lib "0.2"))
 
 ;;; Commentary:
-;; Powerline is library and collection of predefined themes for
-;; customizing the mode-line.
+;;
+;; Powerline is a library for customizing the mode-line that is based on the Vim
+;; Powerline. A collection of predefined themes comes with the package.
+;;
 
 ;;; Code:
 
-(require 'cl)
+(eval-and-compile (require 'powerline-themes))
+(eval-and-compile (require 'powerline-separators))
 
-(require 'powerline-separators)
+(require 'cl-lib)
 
 (defface powerline-active1 '((t (:background "grey22" :inherit mode-line)))
   "Powerline face 1."
@@ -41,26 +44,37 @@
 (defcustom powerline-default-separator 'arrow
   "The separator to use for the default theme.
 
-Valid Values: arrow, slant, chamfer, wave, brace, roundstub,
-zigzag, butt, rounded, contour, curve, utf8"
+Valid Values: alternate, arrow, arrow-fade, bar, box, brace,
+butt, chamfer, contour, curve, rounded, roundstub, wave, zigzag,
+utf-8."
   :group 'powerline
-  :type '(choice
-          (const arrow)
-          (const arrow-fade)
-          (const slant)
-          (const chamfer)
-          (const alternate)
-          (const bar)
-          (const nil)
-          (const wave)
-          (const brace)
-          (const roundstub)
-          (const zigzag)
-          (const butt)
-          (const rounded)
-          (const contour)
-          (const curve)
-          (const utf-8)))
+  :type '(choice (const alternate)
+                 (const arrow)
+                 (const arrow-fade)
+                 (const bar)
+                 (const box)
+                 (const brace)
+                 (const butt)
+                 (const chamfer)
+                 (const contour)
+                 (const curve)
+                 (const rounded)
+                 (const roundstub)
+                 (const slant)
+                 (const wave)
+                 (const zigzag)
+		 (const utf-8)
+                 (const nil)))
+
+(defcustom powerline-utf-8-separator-left #xe0b0
+  "The unicode character number for the left facing separator"
+  :group 'powerline
+  :type  '(choice integer (const nil)))
+
+(defcustom powerline-utf-8-separator-right #xe0b2
+  "The unicode character number for the right facing separator"
+  :group 'powerline
+  :type  '(choice integer (const nil)))
 
 (defcustom powerline-default-separator-dir '(left . right)
   "The separator direction to use for the default theme.
@@ -105,8 +119,8 @@ This is needed to make sure that text is properly aligned."
 
 (defun pl/create-or-get-cache ()
   "Return a frame-local hash table that acts as a memoization cache for powerline. Create one if the frame doesn't have one yet."
-  (or (frame-parameter nil 'powerline-cache)
-      (pl/reset-cache)))
+  (let ((table (frame-parameter nil 'powerline-cache)))
+    (if (hash-table-p table) table (pl/reset-cache))))
 
 (defun pl/reset-cache ()
   "Reset and return the frame-local hash table used for a memoization cache."
@@ -115,73 +129,100 @@ This is needed to make sure that text is properly aligned."
     (modify-frame-parameters nil `((powerline-cache . ,table)))
     table))
 
+(defun powerline-current-separator ()
+  "Get the current default separator. Always returns utf-8 in non-gui mode."
+  (if window-system
+      powerline-default-separator
+    'utf-8))
+
+;;
+;; the frame-local powerline cache causes problems if included in a saved desktop,
+;; so delete it before the desktop is saved.
+;;
+;; see https://github.com/milkypostman/powerline/issues/58
+;;
+;; It is better to put the following code into your init file for Emacs 24.4 or later.
+;; (require 'frameset)
+;; (push '(powerline-cache . :never) frameset-filter-alist)
+;;
+(defun powerline-delete-cache (&optional frame)
+  "Set the FRAME cache to nil."
+  (set-frame-parameter frame 'powerline-cache nil))
+
+(defun powerline-desktop-save-delete-cache ()
+  "Set all caches to nil unless `frameset-filter-alist' has :never for powerline-cache."
+  (unless (and (boundp 'frameset-filter-alist)
+               (eq (cdr (assq 'powerline-cache frameset-filter-alist))
+                   :never))
+    (dolist (fr (frame-list)) (powerline-delete-cache fr))))
+
+(add-hook 'desktop-save-hook 'powerline-desktop-save-delete-cache)
+
 ;; from memoize.el @ http://nullprogram.com/blog/2010/07/26/
 (defun pl/memoize (func)
   "Memoize FUNC.
 If argument is a symbol then install the memoized function over
 the original function.  Use frame-local memoization."
-  (typecase func
+  (cl-typecase func
     (symbol (fset func (pl/memoize-wrap-frame-local (symbol-function func))) func)
     (function (pl/memoize-wrap-frame-local func))))
 
 (defun pl/memoize-wrap-frame-local (func)
   "Return the memoized version of FUNC.
 The memoization cache is frame-local."
-  ;; (message "memoize %s %s %s" cache-sym val-sym args-sym)
-  (let ((funcid (gensym)))
+  (let ((funcid (cl-gensym)))
     `(lambda (&rest args)
        ,(concat (documentation func) (format "\n(memoized function %s)" funcid))
        (let* ((cache (pl/create-or-get-cache))
               (key (cons ',funcid args))
               (val (gethash key cache)))
-         ;;(message "%s" ,val-sym)
          (if val
              val
            (puthash key (apply ,func args) cache))))))
-
 
 (defun pl/separator-height ()
   "Get default height for rendering separators."
   (or powerline-height (frame-char-height)))
 
-
 (defun powerline-reset ()
   "Reset memoized functions."
   (interactive)
+  (pl/memoize (pl/alternate left))
+  (pl/memoize (pl/alternate right))
   (pl/memoize (pl/arrow left))
   (pl/memoize (pl/arrow right))
   (pl/memoize (pl/arrow-fade left))
   (pl/memoize (pl/arrow-fade right))
-  (pl/memoize (pl/slant left))
-  (pl/memoize (pl/slant right))
-  (pl/memoize (pl/chamfer left))
-  (pl/memoize (pl/chamfer right))
-  (pl/memoize (pl/alternate left))
-  (pl/memoize (pl/alternate right))
   (pl/memoize (pl/bar left))
   (pl/memoize (pl/bar right))
-  (pl/memoize (pl/nil left))
-  (pl/memoize (pl/nil right))
-  (pl/memoize (pl/zigzag left))
-  (pl/memoize (pl/zigzag right))
   (pl/memoize (pl/box left))
   (pl/memoize (pl/box right))
-  (pl/memoize (pl/wave left))
-  (pl/memoize (pl/wave right))
-  (pl/memoize (pl/roundstub left))
-  (pl/memoize (pl/roundstub right))
+  (pl/memoize (pl/brace left))
+  (pl/memoize (pl/brace right))
   (pl/memoize (pl/butt left))
   (pl/memoize (pl/butt right))
-  (pl/memoize (pl/rounded left))
-  (pl/memoize (pl/rounded right))
+  (pl/memoize (pl/chamfer left))
+  (pl/memoize (pl/chamfer right))
   (pl/memoize (pl/contour left))
   (pl/memoize (pl/contour right))
-  (pl/memoize (pl/curve right))
   (pl/memoize (pl/curve left))
-  (pl/memoize (pl/brace right))
-  (pl/memoize (pl/brace left))
-  (pl/reset-cache)
-  )
+  (pl/memoize (pl/curve right))
+  (pl/memoize (pl/rounded left))
+  (pl/memoize (pl/rounded right))
+  (pl/memoize (pl/roundstub left))
+  (pl/memoize (pl/roundstub right))
+  (pl/memoize (pl/slant left))
+  (pl/memoize (pl/slant right))
+  (pl/memoize (pl/wave left))
+  (pl/memoize (pl/wave right))
+  (pl/memoize (pl/zigzag left))
+  (pl/memoize (pl/zigzag right))
+  (pl/memoize (pl/nil left))
+  (pl/memoize (pl/nil right))
+  (pl/utf-8 left)
+  (pl/utf-8 right)
+  (pl/reset-cache))
+
 (powerline-reset)
 
 (defun pl/make-xpm (name color1 color2 data)
@@ -243,8 +284,8 @@ static char * %s[] = {
 (defun powerline-hud (face1 face2 &optional width)
   "Return an XPM of relative buffer location using FACE1 and FACE2 of optional WIDTH."
   (unless width (setq width 2))
-  (let ((color1 (if face1 (face-attribute face1 :background) "None"))
-        (color2 (if face2 (face-attribute face2 :background) "None"))
+  (let ((color1 (if face1 (face-background face1) "None"))
+        (color2 (if face2 (face-background face2) "None"))
         (height (or powerline-height (frame-char-height)))
         pmax
         pmin
@@ -256,7 +297,6 @@ static char * %s[] = {
       (setq pmin (point-min)))
     (pl/percent-xpm height pmax pmin we ws
                     (* (frame-char-width) width) color1 color2)))
-
 
 ;;;###autoload
 (defun powerline-mouse (click-group click-type string)
@@ -279,7 +319,6 @@ static char * %s[] = {
             (interactive "@e")
             nil))))
 
-
 ;;;###autoload
 (defun powerline-concat (&rest strings)
   "Concatonate STRINGS and pad sides by spaces."
@@ -295,6 +334,30 @@ static char * %s[] = {
      (&optional face pad)
      (powerline-raw ,body face pad)))
 
+(defun pl/property-substrings (str prop)
+  "Return a list of substrings of STR when PROP change."
+  (let ((beg 0) (end 0)
+        (len (length str))
+        (out))
+    (while (< end (length str))
+      (setq end (or (next-single-property-change beg prop str) len))
+      (setq out (append out (list (substring str beg (setq beg end))))))
+    out))
+
+(defun pl/assure-list (item)
+  "Assure that ITEM is a list."
+  (if (listp item)
+      item
+    (list item)))
+
+(defun pl/add-text-property (str prop val)
+  (mapconcat
+   (lambda (mm)
+     (let ((cur (pl/assure-list (get-text-property 0 'face mm))))
+       (propertize mm 'face (append cur (list val)))))
+   (pl/property-substrings str prop)
+   ""))
+
 ;;;###autoload
 (defun powerline-raw (str &optional face pad)
   "Render STR as mode-line data using FACE and optionally PAD import on left (l) or right (r)."
@@ -306,9 +369,8 @@ static char * %s[] = {
                         (when (and (> (length rendered-str) 0) (eq pad 'r)) " "))))
 
       (if face
-          (propertize padded-str 'face face)
+          (pl/add-text-property padded-str 'face face)
         padded-str))))
-
 
 ;;;###autoload
 (defun powerline-fill (face reserve)
@@ -334,8 +396,7 @@ static char * %s[] = {
                                              (.5 . left-margin))))
               'face face))
 
-
-;;;###autoload
+;;;###autoload (autoload 'powerline-major-mode "powerline")
 (defpowerline powerline-major-mode
   (propertize (format-mode-line mode-name)
               'mouse-face 'mode-line-highlight
@@ -348,7 +409,7 @@ static char * %s[] = {
                            (define-key map [mode-line down-mouse-3] mode-line-mode-menu)
                            map)))
 
-;;;###autoload
+;;;###autoload (autoload 'powerline-minor-modes "powerline")
 (defpowerline powerline-minor-modes
   (mapconcat (lambda (mm)
                (propertize mm
@@ -368,10 +429,10 @@ static char * %s[] = {
                                           [header-line down-mouse-3]
                                           (powerline-mouse 'minor 'menu mm))
                                         map)))
-             (split-string (format-mode-line minor-mode-alist)) " "))
+             (split-string (format-mode-line minor-mode-alist))
+             (propertize " " 'face face)))
 
-
-;;;###autoload
+;;;###autoload (autoload 'powerline-narrow "powerline")
 (defpowerline powerline-narrow
   (let (real-point-min real-point-max)
     (save-excursion
@@ -386,14 +447,18 @@ static char * %s[] = {
                   'local-map (make-mode-line-mouse-map
                               'mouse-1 'mode-line-widen)))))
 
-;;;###autoload
+;;;###autoload (autoload 'powerline-vc "powerline")
 (defpowerline powerline-vc
-  (when (and (buffer-file-name (current-buffer))
-             vc-mode)
-    (format-mode-line '(vc-mode vc-mode))))
+  (when (and (buffer-file-name (current-buffer)) vc-mode)
+    (if window-system
+	(format-mode-line '(vc-mode vc-mode))
+      (let ((backend (vc-backend (buffer-file-name (current-buffer)))))
+	(when backend
+	  (format " %s %s"
+		  (char-to-string #xe0a0)
+		  (vc-working-revision (buffer-file-name (current-buffer)) backend)))))))
 
-
-;;;###autoload
+;;;###autoload (autoload 'powerline-buffer-size "powerline")
 (defpowerline powerline-buffer-size
   (propertize
    (if powerline-buffer-size-suffix
@@ -404,28 +469,24 @@ static char * %s[] = {
                'mouse-1 (lambda () (interactive)
                           (setq powerline-buffer-size-suffix
                                 (not powerline-buffer-size-suffix))
-                          (redraw-modeline)))))
+                          (force-mode-line-update)))))
 
-;;;###autoload
+(defsubst powerline-trim (s)
+  "Remove whitespace at the beginning and the end of string S."
+  (replace-regexp-in-string
+   "\\`[ \t\n\r]+" ""
+   (replace-regexp-in-string "[ \t\n\r]+\\'" "" s)))
+
+;;;###autoload (autoload 'powerline-buffer-id "powerline")
 (defpowerline powerline-buffer-id
-  (format-mode-line mode-line-buffer-identification))
+    (powerline-trim (format-mode-line mode-line-buffer-identification)))
 
-;;;###autoload
+;;;###autoload (autoload 'powerline-process "powerline")
 (defpowerline powerline-process
   (cond
+   ((symbolp mode-line-process) (symbol-value mode-line-process))
    ((listp mode-line-process) (format-mode-line mode-line-process))
    (t mode-line-process)))
-
-;;;###autoload
-(defpowerline powerline-which-func
-  (format-mode-line
-   `(:propertize which-func-current
-                 local-map ,which-func-keymap
-                 face which-func
-                 mouse-face mode-line-highlight
-                 help-echo "mouse-1: go to beginning\n\
-mouse-2: toggle rest visibility\n\
-mouse-3: go to end")))
 
 (defvar pl/default-mode-line mode-line-format)
 
@@ -448,279 +509,40 @@ mouse-3: go to end")))
 
 (add-hook 'minibuffer-exit-hook 'pl/minibuffer-exit)
 
+(defvar powerline-selected-window (frame-selected-window))
+(defun powerline-set-selected-window ()
+  "sets the variable `powerline-selected-window` appropriately"
+  (when (not (minibuffer-window-active-p (frame-selected-window)))
+    (setq powerline-selected-window (frame-selected-window))))
+
+(add-hook 'window-configuration-change-hook 'powerline-set-selected-window)
+(add-hook 'focus-in-hook 'powerline-set-selected-window)
+(add-hook 'focus-out-hook 'powerline-set-selected-window)
+
+(defadvice select-window (after powerline-select-window activate)
+  "makes powerline aware of window changes"
+  (powerline-set-selected-window))
+
+;;;###autoload (autoload 'powerline-selected-window-active "powerline")
 (defun powerline-selected-window-active ()
   "Return whether the current window is active."
-  (or (eq (frame-selected-window)
-          (selected-window))
-      (and (minibuffer-window-active-p
-            (frame-selected-window))
-           (eq (pl/minibuffer-selected-window)
-               (selected-window)))))
+  (eq powerline-selected-window (selected-window)))
 
 (defun powerline-revert ()
   "Revert to the default Emacs mode-line."
   (interactive)
   (setq-default mode-line-format pl/default-mode-line))
 
-
-;;;###autoload
-(defun powerline-default-theme ()
-  "Setup a default mode-line."
-  (interactive)
-  (setq-default mode-line-format
-                '("%e"
-                  (:eval
-                   (let* ((active (powerline-selected-window-active))
-                          (mode-line (if active 'mode-line 'mode-line-inactive))
-                          (face1 (if active 'powerline-active1
-                                   'powerline-inactive1))
-                          (face2 (if active 'powerline-active2
-                                   'powerline-inactive2))
-                          (separator-left
-                           (intern (format "powerline-%s-%s"
-                                           powerline-default-separator
-                                           (car powerline-default-separator-dir))))
-                          (separator-right
-                           (intern (format "powerline-%s-%s"
-                                           powerline-default-separator
-                                           (cdr powerline-default-separator-dir))))
-                          (lhs (list
-                                (powerline-raw "%*" nil 'l)
-                                (powerline-buffer-size nil 'l)
-
-                                (powerline-raw mode-line-mule-info nil 'l)
-                                (powerline-buffer-id nil 'l)
-
-                                (when which-function-mode
-                                  (concat
-                                   " ["
-                                   (powerline-which-func 'which-func nil)
-                                   "]"))
-
-
-                                (powerline-raw " ")
-                                (funcall separator-left mode-line face1)
-
-                                (when (boundp 'erc-modified-channels-object)
-                                  (powerline-raw erc-modified-channels-object
-                                                 face1 'l))
-
-                                (powerline-major-mode face1 'l)
-                                (powerline-process face1)
-                                (powerline-minor-modes face1 'l)
-                                (powerline-narrow face1 'l)
-
-                                (powerline-raw " " face1)
-                                (funcall separator-left face1 face2)
-
-                                (powerline-vc face2 'r)))
-                          (rhs (list
-                                (powerline-raw global-mode-string face2 'r)
-
-                                (funcall separator-right face2 face1)
-
-                                (powerline-raw "%4l" face1 'l)
-                                (powerline-raw ":" face1 'l)
-                                (powerline-raw "%3c" face1 'r)
-
-                                (funcall separator-right face1 mode-line)
-                                (powerline-raw " ")
-
-                                (powerline-raw "%6p" nil 'r)
-
-                                (powerline-hud face2 face1))))
-                     ;;(message "%s %s" separator-left (funcall 'powerline-wave-left mode-line face1))
-                     (concat
-                      (powerline-render lhs)
-                      (powerline-fill face2 (powerline-width rhs))
-                      (powerline-render rhs)))))))
-
-;;;###autoload
-(defun powerline-vim-theme ()
-  "Setup a default mode-line."
-  (interactive)
-  (setq-default mode-line-format
-                '("%e"
-                  (:eval
-                   (let* ((active (powerline-selected-window-active))
-                          (mode-line (if active 'mode-line 'mode-line-inactive))
-                          (face1 (if active 'powerline-active1
-                                   'powerline-inactive1))
-                          (face2 (if active 'powerline-active2
-                                   'powerline-inactive2))
-                          (separator-left
-                           (intern (format "powerline-%s-%s"
-                                           powerline-default-separator
-                                           (car powerline-default-separator-dir))))
-                          (separator-right
-                           (intern (format "powerline-%s-%s"
-                                           powerline-default-separator
-                                           (cdr powerline-default-separator-dir))))
-                          (lhs (list
-                                (powerline-buffer-id `(mode-line-buffer-id ,mode-line) 'l)
-
-                                (powerline-raw "[" mode-line 'l)
-                                (powerline-major-mode mode-line)
-                                (powerline-process mode-line)
-                                (powerline-raw "]" mode-line)
-
-                                (when (buffer-modified-p)
-                                  (powerline-raw "[+]" mode-line))
-                                (when buffer-read-only
-                                  (powerline-raw "[RO]" mode-line))
-
-                                (powerline-raw "[%z]" mode-line)
-
-                                ;; (powerline-raw (concat "[" (mode-line-eol-desc) "]") mode-line)
-
-                                (when which-function-mode
-                                  (concat
-                                   " ["
-                                   (powerline-which-func 'which-func nil)
-                                   "]"))
-
-
-                                (when (boundp 'erc-modified-channels-object)
-                                  (powerline-raw erc-modified-channels-object
-                                                 face1 'l))
-
-                                (powerline-raw "[" mode-line 'l)
-                                (powerline-minor-modes mode-line)
-                                (powerline-raw "%n" mode-line)
-                                (powerline-raw "]" mode-line)
-
-
-                                (when (and vc-mode buffer-file-name)
-                                  (let ((backend (vc-backend buffer-file-name)))
-                                    (when backend
-                                      (concat
-                                       (powerline-raw "[" mode-line 'l)
-                                       (powerline-raw (format "%s / %s" backend
-                                                              (vc-working-revision buffer-file-name backend)))
-                                       (powerline-raw "]" mode-line)))))))
-
-                          (rhs (list
-                                (powerline-raw '(10 "%i"))
-                                (powerline-raw global-mode-string mode-line 'r)
-                                (powerline-raw "%l," mode-line 'l)
-                                (powerline-raw (format-mode-line '(10 "%c")))
-
-                                (powerline-raw (replace-regexp-in-string  "%" "%%" (format-mode-line '(-3 "%p"))) mode-line 'r))))
-                     ;;(message "%s %s" separator-left (funcall 'powerline-wave-left mode-line face1))
-                     (concat
-                      (powerline-render lhs)
-                      (powerline-fill mode-line (powerline-width rhs))
-                      (powerline-render rhs)))))))
-
-
-;;;###autoload
-(defun powerline-center-theme ()
-  "Setup a default mode-line with major and minor modes centered."
-  (interactive)
-  (setq-default mode-line-format
-                '("%e"
-                  (:eval
-                   (let* ((active (powerline-selected-window-active))
-                          (mode-line (if active 'mode-line 'mode-line-inactive))
-                          (face1 (if active 'powerline-active1
-                                   'powerline-inactive1))
-                          (face2 (if active 'powerline-active2
-                                   'powerline-inactive2))
-                          (separator-left
-                           (intern (format "powerline-%s-%s"
-                                           powerline-default-separator
-                                           (car powerline-default-separator-dir))))
-                          (separator-right
-                           (intern (format "powerline-%s-%s"
-                                           powerline-default-separator
-                                           (cdr powerline-default-separator-dir))))
-                          (lhs (list
-                                (powerline-raw "%*" nil 'l)
-                                (powerline-buffer-size nil 'l)
-                                (powerline-buffer-id nil 'l)
-
-                                (powerline-raw " ")
-                                (funcall separator-left mode-line face1)
-
-                                (powerline-narrow face1 'l)
-
-                                (powerline-vc face1)))
-                          (rhs (list
-                                (powerline-raw global-mode-string face1 'r)
-
-                                (powerline-raw "%4l" face1 'r)
-                                (powerline-raw ":" face1)
-                                (powerline-raw "%3c" face1 'r)
-
-                                (funcall separator-right face1 mode-line)
-                                (powerline-raw " ")
-                                (powerline-raw "%6p" nil 'r)
-                                (powerline-hud face2 face1)))
-                          (center (list
-                                   (powerline-raw " " face1)
-                                   (funcall separator-left face1 face2)
-                                   (when (boundp 'erc-modified-channels-object)
-                                     (powerline-raw erc-modified-channels-object
-                                                    face2 'l))
-                                   (powerline-major-mode face2 'l)
-                                   (powerline-process face2)
-                                   (powerline-raw " :" face2)
-                                   (powerline-minor-modes face2 'l)
-                                   (powerline-raw " " face2)
-                                   (funcall separator-right face2 face1))))
-
-                     (concat
-                      (powerline-render lhs)
-                      (powerline-fill-center face1 (/ (powerline-width center)
-                                                      2.0))
-                      (powerline-render center)
-                      (powerline-fill face1 (powerline-width rhs))
-                      (powerline-render rhs)))))))
-
-
-;;;###autoload
-(defun powerline-nano-theme ()
-  "Setup a nano-like mode-line."
-  (interactive)
-  (setq-default mode-line-format
-                '("%e"
-                  (:eval
-                   (let* ((active (powerline-selected-window-active))
-                          (lhs (list
-                                (powerline-raw (concat
-                                                "GNU Emacs "
-                                                (number-to-string
-                                                 emacs-major-version)
-                                                "."
-                                                (number-to-string
-                                                 emacs-minor-version))
-                                               nil 'l)))
-                          (rhs (list
-                                (if (buffer-modified-p)
-                                    (powerline-raw "Modified" nil 'r))))
-                          (center (list
-                                   (powerline-raw "%b" nil))))
-
-                     (concat
-                      (powerline-render lhs)
-                      (powerline-fill-center nil (/ (powerline-width center)
-                                                    2.0))
-                      (powerline-render center)
-                      (powerline-fill nil (powerline-width rhs))
-                      (powerline-render rhs)))))))
-
-
 (defun pl/render (item)
   "Render a powerline ITEM."
   (cond
    ((and (listp item) (eq 'image (car item)))
-    ;;    (message "%s" (plist-get (cdr item) :face))
     (propertize " " 'display item
                 'face (plist-get (cdr item) :face)))
    (item item)))
 
 (defun powerline-render (values)
-  "Renter a list of powerline VALUES."
+  "Render a list of powerline VALUES."
   (mapconcat 'pl/render values ""))
 
 (defun powerline-width (values)
@@ -735,7 +557,7 @@ mouse-3: go to end")))
            (powerline-width (cdr values))))
     0))
 
-(provide 'powerline)
 
+(provide 'powerline)
 
 ;;; powerline.el ends here
